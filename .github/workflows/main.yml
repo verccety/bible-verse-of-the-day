@@ -3,7 +3,7 @@ name: Daily Bible Verse Bot (Nest.js)
 on:
   schedule:
     # Runs every day at 07:30 UTC. Adjust as needed.
-    - cron: '30 7 * * *'
+    - cron: '0 5 * * *'
 
   workflow_dispatch: # Allows manual runs
 
