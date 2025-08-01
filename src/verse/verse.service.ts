@@ -38,12 +38,11 @@ export class VerseService {
       );
 
       // 3. Construct the final, beautifully formatted message
-      const formattedMessage = `📖 **Стих дня**
-*${currentDate}*
+      const formattedMessage = `📖 **Стих дня** • *${currentDate}*
+──────────────────
 
-**${display_ref}**
-
-*${decodedVerseText}*`;
+*${decodedVerseText}*
+**— ${display_ref}**`;
 
       this.logger.log(
         `Successfully fetched and formatted verse: ${display_ref}`,
