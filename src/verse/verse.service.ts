@@ -21,20 +21,32 @@ export class VerseService {
         },
       });
 
-      // Destructure the two fields we need from the API response
       const { content, display_ref } = response.data.votd;
 
-      // 1. The 'display_ref' is already clean, so we use it directly.
-      const verseReference = display_ref;
-
-      // 2. The 'content' has HTML entities, so we decode it.
+      // 1. Decode the verse text
       const decodedVerseText = he.decode(content);
 
-      // 3. Construct the final message with the clean parts.
-      const formattedMessage = `📖 **Verse of the Day** (${verseReference})\n\n*${decodedVerseText}*`;
+      // 2. Format the current date in Russian
+      // This will produce a string like "1 августа 2025 г."
+      const dateOptions: Intl.DateTimeFormatOptions = {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      };
+      const currentDate = new Intl.DateTimeFormat('ru-RU', dateOptions).format(
+        new Date(),
+      );
+
+      // 3. Construct the final, beautifully formatted message
+      const formattedMessage = `📖 **Стих дня**
+*${currentDate}*
+
+**${display_ref}**
+
+*${decodedVerseText}*`;
 
       this.logger.log(
-        `Successfully fetched and formatted verse: ${verseReference}`,
+        `Successfully fetched and formatted verse: ${display_ref}`,
       );
       return formattedMessage;
     } catch (error) {
