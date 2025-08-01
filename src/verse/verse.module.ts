@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { VerseService } from './verse.service';
 
 @Module({
-  providers: [VerseService]
+  providers: [VerseService],
+  exports: [VerseService],
 })
 export class VerseModule {}

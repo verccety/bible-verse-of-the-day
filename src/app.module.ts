@@ -13,7 +13,7 @@ import { VerseService } from './verse/verse.service';
     TelegramModule,
     ConfigModule.forRoot({ isGlobal: true }),
   ],
-  controllers: [AppController],
-  providers: [TelegramService, VerseService, AppService],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}
