@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import he from 'he';
+import { htmlToText } from 'html-to-text';
 
 @Injectable()
 export class VerseService {
@@ -24,7 +25,10 @@ export class VerseService {
 
       const { content, display_ref } = response.data.votd;
       const decodedVerseText = he.decode(content);
-      return { content: decodedVerseText, display_ref };
+      const plainText = htmlToText(decodedVerseText, {
+        wordwrap: false,
+      });
+      return { content: plainText, display_ref };
     } catch (error) {
       this.logger.error(
         `Failed to fetch verse from Bible Gateway for version ${version}`,
@@ -61,7 +65,7 @@ export class VerseService {
       
       ━━━━━━━━━━━━━━━━━━━━
       
-      🌍 *${csbVerse.content}* (CSB)
+      🌍 *${csbVerse.content}* 
       
       **— ${rusvVerse.display_ref}**`;
 
