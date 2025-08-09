@@ -31,8 +31,8 @@ export class VerseService {
       let explanation = '';
       try {
         explanation = await this.aiExplainService.explain(
-          rusvVerse.content,
-          rusvVerse.display_ref,
+          csbVerse.content,
+          csbVerse.display_ref,
         );
       } catch (e) {
         this.logger.warn('AI explanation unavailable, continuing without it');
