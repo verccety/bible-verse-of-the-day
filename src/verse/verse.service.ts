@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { BibleGatewayService } from '../bible-gateway/bible-gateway.service';
+import { AiExplainService } from '../ai/ai-explain.service';
 
 @Injectable()
 export class VerseService {
   private readonly logger = new Logger(VerseService.name);
 
-  constructor(private readonly bibleGatewayService: BibleGatewayService) {}
+  constructor(
+    private readonly bibleGatewayService: BibleGatewayService,
+    private readonly aiExplainService: AiExplainService,
+  ) {}
 
   public async getVerseOfTheDay(): Promise<string> {
     try {
@@ -23,6 +27,17 @@ export class VerseService {
         new Date(),
       );
 
+      // Ask AI for a short Russian explanation of the Russian verse
+      let explanation = '';
+      try {
+        explanation = await this.aiExplainService.explain(
+          rusvVerse.content,
+          rusvVerse.display_ref,
+        );
+      } catch (e) {
+        this.logger.warn('AI explanation unavailable, continuing without it');
+      }
+
       const formattedMessage = `📖 **Стих дня**
       🗓 ${currentDate}
       
@@ -33,6 +48,11 @@ export class VerseService {
       ━━━━━━━━━━━━━━━━━━━━
       
       🌍 *${csbVerse.content}* 
+      ${explanation ? `
+      ━━━━━━━━━━━━━━━━━━━━
+      
+      📝 Краткое объяснение: ${explanation}
+      ` : ''}
       
       **— ${rusvVerse.display_ref}**`;
 
