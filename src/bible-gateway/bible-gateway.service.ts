@@ -166,6 +166,7 @@ export class BibleGatewayService {
         .split('\n')
         .map((l) => l.trimEnd())
         .filter((l, i, arr) => !(l === '' && arr[i - 1] === ''))
+        .filter((l) => !this.shouldDropLine(l)) // drop "Read full chapter" etc.
         .join('\n')
         .trim();
     } catch (e: any) {
@@ -174,5 +175,21 @@ export class BibleGatewayService {
       );
       return '';
     }
+  }
+
+  private shouldDropLine(line: string): boolean {
+    // normalize spaces & case
+    const t = line
+      .replace(/\u00A0/g, ' ')
+      .trim()
+      .toLowerCase();
+
+    // common BG CTAs / variants (en + ru)
+    return (
+      t === 'read full chapter' ||
+      t === 'read the full chapter' ||
+      t === 'читать главу полностью' ||
+      t === 'читать полностью'
+    );
   }
 }
