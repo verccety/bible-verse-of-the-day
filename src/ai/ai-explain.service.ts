@@ -88,6 +88,7 @@ export class AiExplainService {
         if (explanation) {
           return explanation;
         }
+        console.log('response text:', result.response.text());
         throw new Error('AI returned an empty or invalid explanation.');
       } catch (error) {
         if (attempt >= this.maxRetries) {
