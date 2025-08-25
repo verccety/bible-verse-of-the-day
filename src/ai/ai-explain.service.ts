@@ -82,6 +82,7 @@ export class AiExplainService {
     // 5. Retry loop is clean, with error handling logic separated.
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
+        console.log('userPrompt', userPrompt);
         const result = await this.model.generateContent(userPrompt);
         const explanation = this.sanitize(result.response.text());
 
