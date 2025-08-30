@@ -2,24 +2,22 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   GoogleGenerativeAI,
+  HarmBlockThreshold,
+  HarmCategory,
   type GenerativeModel,
+  type GenerateContentResult,
 } from '@google/generative-ai';
 
 @Injectable()
 export class AiExplainService {
-  // 1. All static configuration is centralized here for clarity and maintainability.
   private static readonly CONSTANTS = {
-    // Model and API settings
-    MODEL_NAME: 'gemini-2.5-pro', // A fast, cost-effective, and capable model
+    MODEL_PRIMARY: 'gemini-2.5-pro',
+    MODEL_FALLBACK: 'gemini-2.5-flash',
     API_KEY_NAME: 'GOOGLE_API_KEY',
     MAX_RETRIES_KEY: 'AI_EXPLAIN_MAX_RETRIES',
-
-    // Default values for retry logic
     DEFAULT_MAX_RETRIES: 3,
     BASE_DELAY_MS: 500,
     JITTER_MS: 200,
-
-    // Pre-compiled, powerful regexes for sanitization
     SANITIZE_PATTERNS: {
       STRIP_QUOTES: /^[“"«]\s*([\s\S]*?)\s*[”"»]$/u,
       LEADING_PHRASES:
@@ -31,14 +29,14 @@ export class AiExplainService {
   };
 
   private readonly logger = new Logger(AiExplainService.name);
-  private readonly model?: GenerativeModel;
+  private readonly primary?: GenerativeModel;
+  private readonly fallback?: GenerativeModel;
   private readonly maxRetries: number;
 
   constructor(private readonly config: ConfigService) {
-    const apiKey: string | undefined = this.config.get<string>(
+    const apiKey = this.config.get<string>(
       AiExplainService.CONSTANTS.API_KEY_NAME,
     );
-
     if (!apiKey) {
       this.logger.warn(
         'GOOGLE_API_KEY is not configured. AI explanations are disabled.',
@@ -46,14 +44,47 @@ export class AiExplainService {
       return;
     }
 
-    // 2. The model is initialized once for efficiency.
     const genAI = new GoogleGenerativeAI(apiKey);
-    this.model = genAI.getGenerativeModel({
-      model: AiExplainService.CONSTANTS.MODEL_NAME,
-      // 3. System instruction cleanly separates the AI's role from the prompt.
+
+    const baseModelConfig = {
+      // Keep short, deterministic answers
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 200,
+        responseMimeType: 'text/plain',
+      },
+      // Loosen filters a bit to avoid benign blocks on religious text
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+      ],
+      // Clear role & constraints (helps prevent “recitation” blocks)
       systemInstruction: this.buildSystemInstruction(),
-      // 4. Generation config ensures concise and consistent responses.
-      generationConfig: { temperature: 0.3, maxOutputTokens: 200 },
+    } as const;
+
+    this.primary = genAI.getGenerativeModel({
+      model: AiExplainService.CONSTANTS.MODEL_PRIMARY,
+      ...baseModelConfig,
+      safetySettings: [...baseModelConfig.safetySettings], // turns readonly into mutable
+    });
+    this.fallback = genAI.getGenerativeModel({
+      model: AiExplainService.CONSTANTS.MODEL_FALLBACK,
+      ...baseModelConfig,
+      safetySettings: [...baseModelConfig.safetySettings],
     });
 
     const retries = parseInt(
@@ -67,91 +98,140 @@ export class AiExplainService {
         : AiExplainService.CONSTANTS.DEFAULT_MAX_RETRIES;
   }
 
-  /**
-   * Generates a concise theological explanation for a Bible verse.
-   * Retries on failure with exponential backoff and jitter.
-   * @returns The explanation, or an empty string if disabled or failed.
-   */
   async explain(verseText: string, reference: string): Promise<string> {
-    if (!this.model || !verseText?.trim()) {
-      return '';
-    }
+    if (!this.primary || !verseText?.trim()) return '';
 
-    const userPrompt = `Стих: ${reference}\nТекст: "${verseText}"\nДай краткое объяснение:`;
+    // NOTE: Explicitly tell the model not to quote the verse (avoids “recitation” blocks).
+    const userPromptBase =
+      `Стих: ${reference}\n` +
+      `Текст стиха:\n${verseText}\n\n` +
+      `Задача: кратко объясни смысл стиха (2–4 предложения) своими словами на русском.\n` +
+      `Не цитируй текст из стиха; не приводить дословные фразы длиннее 10 слов подряд.`;
 
-    // 5. Retry loop is clean, with error handling logic separated.
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        console.log('userPrompt', userPrompt);
-        const result = await this.model.generateContent(userPrompt);
-        const explanation = this.sanitize(result.response.text());
+    // Try primary model, then fallback model if needed
+    for (const { model, name } of [
+      { model: this.primary!, name: '2.5-pro' },
+      { model: this.fallback!, name: '2.5-flash' },
+    ]) {
+      for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+        try {
+          const result = await model.generateContent(userPromptBase);
+          const text = this.extractText(result);
+          if (text) return this.sanitize(text);
 
-        if (explanation) {
-          return explanation;
-        }
-        console.log('response text:', result.response.text());
-        throw new Error('AI returned an empty or invalid explanation.');
-      } catch (error) {
-        if (attempt >= this.maxRetries) {
-          this.logger.error(
-            `AI explanation failed after ${this.maxRetries} attempts: ${error.message}`,
+          // Log deep diagnostics if empty
+          this.logDiagnostics(
+            result,
+            `${name} attempt ${attempt} produced empty text`,
           );
-          break; // Exit loop after final failure
-        }
+          // If prompt was blocked for “RECITATION” or similar, append an extra guard and retry immediately.
+          if (this.wasRecitationBlocked(result)) {
+            const amended =
+              userPromptBase +
+              '\nПожалуйста, перефразируй своими словами, без цитирования и ссылок.';
+            const retried = await model.generateContent(amended);
+            const t2 = this.extractText(retried);
+            if (t2) return this.sanitize(t2);
+            this.logDiagnostics(retried, `${name} recitation-retry also empty`);
+          }
 
-        this.logger.warn(
-          `AI explanation attempt ${attempt} failed: ${error.message}. Retrying...`,
-        );
-        const delay = this.calculateBackoffDelay(attempt);
-        await this.sleep(delay);
+          // No text — throw to trigger backoff
+          throw new Error('Empty candidates');
+        } catch (error: any) {
+          if (attempt >= this.maxRetries) {
+            this.logger.error(
+              `AI explanation failed on ${name} after ${this.maxRetries} attempts: ${error?.message || error}`,
+            );
+            break;
+          }
+          this.logger.warn(
+            `AI explanation ${name} attempt ${attempt} failed: ${error?.message || error}. Retrying...`,
+          );
+          await this.sleep(this.calculateBackoffDelay(attempt));
+        }
       }
     }
-
     return '';
   }
 
   private buildSystemInstruction(): string {
     return [
       'Ты — краткий и уважительный помощник-богослов, который объясняет библейские стихи по-русски.',
-      'Напиши 2–4 предложения. Сразу перейди к сути без приветствий, обращений, вступлений и фраз типа «конечно», «давайте», «итак».',
-      'Избегай эмодзи и Markdown-разметки. Не используй списки. Не добавляй заключений вроде «надеюсь, это помогло».',
-      'Сфокусируйся на историко-культурном контексте (если уместно), ключевой мысли и практическом ободрении.',
-    ].join(' '); // A single space is sufficient here
+      'Напиши 2–4 предложения. Сразу переходи к сути, без приветствий и вступлений.',
+      'Не используй списки, эмодзи, Markdown. Не давай выводов вроде «надеюсь, это помогло».',
+      'Пиши только своими словами, не цитируй входной текст; не воспроизводи длинные фрагменты.',
+      'Сфокусируйся на историко-культурном контексте (если уместно), ключевой мысли и практическом выводе.',
+    ].join(' ');
   }
 
-  /**
-   * Cleans raw AI output using a series of efficient regex replacements.
-   */
+  private extractText(res: GenerateContentResult): string {
+    // 1) normal path
+    try {
+      const t = res?.response?.text?.();
+      if (t) return t;
+    } catch {
+      /* ignore */
+    }
+
+    // 2) fallback to first candidate parts
+    const cands = res?.response?.candidates ?? [];
+    for (const c of cands) {
+      const parts = c?.content?.parts ?? [];
+      const t = parts
+        .map((p: any) => p?.text ?? '')
+        .join('\n')
+        .trim();
+      if (t) return t;
+    }
+    return '';
+  }
+
+  private wasRecitationBlocked(res: GenerateContentResult): boolean {
+    const pf = (res as any)?.response?.promptFeedback;
+    const block = pf?.blockReason?.toString()?.toUpperCase?.() || '';
+    // Some SDKs surface “RECITATION” in candidate safety ratings instead
+    const ratings = (
+      (res as any)?.response?.candidates?.[0]?.safetyRatings ?? []
+    ).map((r: any) => r?.category || '');
+    return (
+      block.includes('RECITATION') ||
+      ratings.join('|').toUpperCase().includes('RECITATION')
+    );
+  }
+
+  private logDiagnostics(res: GenerateContentResult, msg: string) {
+    try {
+      const pf = (res as any)?.response?.promptFeedback;
+      const cand0 = (res as any)?.response?.candidates?.[0];
+      this.logger.warn(
+        `${msg}. promptFeedback=${JSON.stringify(pf)} finishReason=${cand0?.finishReason} safety=${JSON.stringify(cand0?.safetyRatings)}`,
+      );
+    } catch {
+      // swallow
+    }
+  }
+
   private sanitize(text: string): string {
     if (!text) return '';
-
-    const { SANITIZE_PATTERNS } = AiExplainService.CONSTANTS;
-
-    // 6. A fluent chain of replacements is readable and efficient.
-    const sanitizedText = text
+    const P = AiExplainService.CONSTANTS.SANITIZE_PATTERNS;
+    const sanitized = text
       .trim()
-      .replace(SANITIZE_PATTERNS.LEADING_PHRASES, '')
-      .replace(SANITIZE_PATTERNS.TRAILING_PHRASES, '')
-      .replace(SANITIZE_PATTERNS.STRIP_QUOTES, '$1')
-      .replace(SANITIZE_PATTERNS.EXCESS_WHITESPACE, ' ')
+      .replace(P.LEADING_PHRASES, '')
+      .replace(P.TRAILING_PHRASES, '')
+      .replace(P.STRIP_QUOTES, '$1')
+      .replace(P.EXCESS_WHITESPACE, ' ')
       .trim();
-
-    // Final check to ensure the result isn't just leftover punctuation.
-    return /^[\s.,!?:]*$/.test(sanitizedText) ? '' : sanitizedText;
+    return /^[\s.,!?:]*$/.test(sanitized) ? '' : sanitized;
   }
 
-  /**
-   * Calculates exponential backoff delay with jitter.
-   */
   private calculateBackoffDelay(attempt: number): number {
     const { BASE_DELAY_MS, JITTER_MS } = AiExplainService.CONSTANTS;
-    // Using bit-shift for powers of 2 is clean and fast.
-    const exponential = BASE_DELAY_MS * (1 << (attempt - 1));
-    const jitter = Math.floor(Math.random() * JITTER_MS);
-    return exponential + jitter;
+    return (
+      BASE_DELAY_MS * (1 << (attempt - 1)) +
+      Math.floor(Math.random() * JITTER_MS)
+    );
   }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private sleep(ms: number) {
+    return new Promise((r) => setTimeout(r, ms));
   }
 }
