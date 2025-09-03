@@ -47,12 +47,6 @@ export class AiExplainService {
     const genAI = new GoogleGenerativeAI(apiKey);
 
     const baseModelConfig = {
-      // Keep short, deterministic answers
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 200,
-        responseMimeType: 'text/plain',
-      },
       // Loosen filters a bit to avoid benign blocks on religious text
       safetySettings: [
         {
