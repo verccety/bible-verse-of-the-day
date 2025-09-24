@@ -23,12 +23,13 @@ export class BibleGatewayService {
     try {
       const response = await firstValueFrom(
         this.httpService.get(url, {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36',
-            Accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
-          },
+          headers: browserLikeHeaders({
+            // If the API is picky about CORS/anti-bot, set these to your real site:
+            // origin: 'https://your-site.example',
+            // referer: 'https://your-site.example/some-page',
+          }),
           responseType: 'json',
+          // Axios will auto-decompress when Accept-Encoding is set
           maxRedirects: 5,
         }),
       );
@@ -192,4 +193,37 @@ export class BibleGatewayService {
       t === 'читать полностью'
     );
   }
+}
+
+function browserLikeHeaders(opts?: { origin?: string; referer?: string }) {
+  const h: Record<string, string> = {
+    // Chrome 140 on Windows 10 x64
+    'user-agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.186 Safari/537.36',
+
+    // Typical for fetch/XHR (Axios defaults are similar but we mimic Chrome more closely)
+    accept: 'application/json, text/plain, */*',
+
+    // Common browser defaults
+    'accept-language': 'en-US,en;q=0.9',
+    'accept-encoding': 'gzip, deflate, br, zstd',
+
+    // Client Hints commonly present in Chrome requests (safe to omit if not needed)
+    'sec-ch-ua':
+      '"Chromium";v="140", "Google Chrome";v="140", "Not=A?Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+
+    // Fetch metadata (these values are typical for cross-site API calls)
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-site': 'cross-site',
+
+    // Some APIs still key off this
+    'x-requested-with': 'XMLHttpRequest',
+  };
+
+  if (opts?.origin) h['origin'] = opts.origin;
+  if (opts?.referer) h['referer'] = opts.referer;
+  return h;
 }
