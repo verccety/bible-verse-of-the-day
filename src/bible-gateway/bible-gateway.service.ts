@@ -43,6 +43,7 @@ export class BibleGatewayService {
       const joined = texts.filter(Boolean).join('\n');
       return { content: joined, display_ref };
     } catch (error: any) {
+      this.logger.error(error);
       this.logger.error(
         `Failed to fetch verse from Bible Gateway for version ${version}: ${error?.message || error}`,
         error?.stack,
